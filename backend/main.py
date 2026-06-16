@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 import os
 from dotenv import load_dotenv
 
@@ -35,6 +35,8 @@ ALGORITHM = "HS256"
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login", auto_error=False)
 
+
+# --- MODELOS PYDANTIC ---
 class UsuarioRegistro(BaseModel):
     username: str
     email: str
@@ -60,7 +62,7 @@ class ActualizarProgreso(BaseModel):
 class EscribirResena(BaseModel):
     libro_id: str
     calificacion: float
-    texto: str
+    texto: Optional[str] = ""
 
 class VibeTexto(BaseModel):
     texto: str
@@ -72,13 +74,20 @@ class VibeCancion(BaseModel):
 class VibeVideo(BaseModel):
     url: str
 
+class ChatMensaje(BaseModel):
+    mensaje: str
+    historial: Optional[List[dict]] = []
+
 class ChatLibros(BaseModel):
     mensaje: str
+    historial: list = []
 
 class RecuperarPassword(BaseModel):
     identificador: str
     nueva_password: str
 
+
+# --- HELPERS ---
 def crear_token(data: dict):
     datos = data.copy()
     datos["exp"] = datetime.utcnow() + timedelta(hours=24)
@@ -96,6 +105,7 @@ def obtener_usuario_actual(token: str = Depends(oauth2_scheme), db: Session = De
         return usuario
     except JWTError:
         raise HTTPException(status_code=401, detail="Token inválido")
+
 
 # --- AUTH ---
 @app.post("/registro")
@@ -128,12 +138,12 @@ def recuperar_password(datos: RecuperarPassword, db: Session = Depends(get_db)):
     ).first()
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
-
     usuario.password_hash = pwd_context.hash(datos.nueva_password)
     db.commit()
     return {"mensaje": "Contraseña actualizada correctamente"}
 
-# --- VIBE (Agente 1) ---
+
+# --- VIBE ---
 @app.post("/vibe/texto")
 def vibe_texto(datos: VibeTexto, usuario=Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
     try:
@@ -191,9 +201,78 @@ def vibe_video(datos: VibeVideo, usuario=Depends(obtener_usuario_actual), db: Se
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- BIBLIOTECA (Agente 3) ---
+
+# --- CHAT LITERARIO IA (Agente 1) ---
+@app.post("/chat")
+def chat_literario(datos: ChatMensaje, usuario=Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
+    try:
+        agente = LibrarianAgent(db)
+        resultado = agente.chat_literario(datos.mensaje, usuario.id, datos.historial or [])
+        return resultado
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Chat legacy (compatibilidad)
+@app.post("/chat/libros")
+def chat_libros(datos: ChatLibros, usuario=Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
+    try:
+        supervisor = SupervisorAgent(db)
+        return supervisor.responder_chat_libros(
+            usuario.id,
+            datos.mensaje,
+            historial=datos.historial
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- RECOMENDACIÓN POR PERFIL (Agente 2) ---
+@app.get("/recomendar/perfil")
+def recomendar_perfil(usuario=Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
+    try:
+        recommender = RecommenderAgent(db)
+        return recommender.recomendar_por_perfil(usuario.id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- SUPERVISOR — REPORTE IA (Agente 3) ---
+@app.get("/supervisor/reporte")
+def reporte_supervisor(usuario=Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
+    try:
+        supervisor = SupervisorAgent(db)
+        return supervisor.generar_reporte_usuario(usuario.id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- BIBLIOTECA ---
+@app.get("/biblioteca")
+def obtener_biblioteca(usuario=Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
+    try:
+        agente = LibrarianAgent(db)
+        return agente.obtener_biblioteca(usuario.id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/biblioteca")
+def agregar_biblioteca_v2(datos: AgregarBiblioteca, usuario=Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
+    try:
+        agente = LibrarianAgent(db)
+        return agente.agregar_a_biblioteca(usuario.id, datos.libro.dict(), datos.estado)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/biblioteca/agregar")
 def agregar_biblioteca(datos: AgregarBiblioteca, usuario=Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
+    try:
+        agente = LibrarianAgent(db)
+        return agente.agregar_a_biblioteca(usuario.id, datos.libro.dict(), datos.estado)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/biblioteca/{libro_id}")
+def actualizar_biblioteca(libro_id: str, datos: AgregarBiblioteca, usuario=Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
     try:
         agente = LibrarianAgent(db)
         return agente.agregar_a_biblioteca(usuario.id, datos.libro.dict(), datos.estado)
@@ -208,11 +287,34 @@ def actualizar_progreso(datos: ActualizarProgreso, usuario=Depends(obtener_usuar
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/biblioteca")
-def obtener_biblioteca(usuario=Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
+
+# --- RESEÑAS ---
+@app.get("/resenas")
+def obtener_resenas_usuario(usuario=Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
+    from models import Reseña, Libro
+    reseñas = db.query(Reseña).filter(Reseña.usuario_id == usuario.id).order_by(Reseña.fecha.desc()).all()
+    resultado = []
+    for r in reseñas:
+        libro = db.query(Libro).filter(Libro.id == r.libro_id).first()
+        resultado.append({
+            "id": r.id,
+            "libro_id": r.libro_id,
+            "titulo_libro": libro.titulo if libro else "Libro desconocido",
+            "autor_libro": libro.autor if libro else "",
+            "portada_url": libro.portada_url if libro else "",
+            "calificacion": r.calificacion,
+            "texto": r.texto,
+            "sentimiento": r.sentimiento,
+            "tags_auto": r.tags_auto.split(",") if r.tags_auto else [],
+            "fecha": r.fecha.isoformat() if r.fecha else "",
+        })
+    return resultado
+
+@app.get("/resenas/{libro_id}")
+def obtener_resenas(libro_id: str, db: Session = Depends(get_db)):
     try:
         agente = LibrarianAgent(db)
-        return agente.obtener_biblioteca(usuario.id)
+        return agente.obtener_resenas_libro(libro_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -220,11 +322,20 @@ def obtener_biblioteca(usuario=Depends(obtener_usuario_actual), db: Session = De
 def escribir_resena(datos: EscribirResena, usuario=Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
     try:
         agente = LibrarianAgent(db)
-        return agente.escribir_reseña(usuario.id, datos.libro_id, datos.calificacion, datos.texto)
+        return agente.escribir_reseña(usuario.id, datos.libro_id, datos.calificacion, datos.texto or "")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- PERFIL (Agente 4) ---
+
+# --- ESTADÍSTICAS ---
+@app.get("/estadisticas")
+def estadisticas(usuario=Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
+    try:
+        supervisor = SupervisorAgent(db)
+        return supervisor.resumen_usuario(usuario.id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/perfil/resumen")
 def resumen_perfil(usuario=Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
     try:
@@ -233,14 +344,32 @@ def resumen_perfil(usuario=Depends(obtener_usuario_actual), db: Session = Depend
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/chat/libros")
-def chat_libros(datos: ChatLibros, usuario=Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
+
+# --- LIBROS POPULARES ---
+@app.get("/libros/populares")
+def libros_populares(db: Session = Depends(get_db)):
     try:
-        supervisor = SupervisorAgent(db)
-        return supervisor.responder_chat_libros(usuario.id, datos.mensaje)
+        from models import Libro
+        libros = db.query(Libro).filter(Libro.total_reseñas > 0).order_by(
+            Libro.rating_promedio.desc()
+        ).limit(10).all()
+        if not libros:
+            # Fallback: retorna libros populares conocidos
+            return [
+                {"titulo": "Fourth Wing", "autor": "Rebecca Yarros", "genero": "romantasy"},
+                {"titulo": "The Seven Husbands of Evelyn Hugo", "autor": "Taylor Jenkins Reid", "genero": "literary fiction"},
+                {"titulo": "Happy Place", "autor": "Emily Henry", "genero": "contemporary romance"},
+            ]
+        return [
+            {"id": l.id, "titulo": l.titulo, "autor": l.autor, "genero": l.genero,
+             "portada_url": l.portada_url, "rating_promedio": l.rating_promedio,
+             "total_reseñas": l.total_reseñas}
+            for l in libros
+        ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/")
 def root():
-    return {"mensaje": "Novelia API funcionando 🎉"}
+    return {"mensaje": "Novelia API funcionando", "version": "2.0"}

@@ -80,7 +80,7 @@ class VibeAgent:
         EXPLICACION: [una oración explicando por qué]
         """
         try:
-            response = client.models.generate_content(model="gemini-2.0-flash-lite", contents=prompt)
+            response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
             parsed = self._parsear_respuesta(response.text, "texto")
             if parsed.get("vibe"):
                 return parsed
@@ -103,11 +103,13 @@ class VibeAgent:
         """
         try:
             response = client.models.generate_content(
-                model="gemini-2.0-flash-lite",
-                contents=[
-                    {"mime_type": "image/jpeg", "data": imagen_base64},
-                    prompt
-                ]
+                model="gemini-2.0-flash",
+                contents=[{
+                    "parts": [
+                        {"inline_data": {"mime_type": "image/jpeg", "data": imagen_base64}},
+                        {"text": prompt}
+                    ]
+                }]
             )
             parsed = self._parsear_respuesta(response.text, "imagen")
             if parsed.get("vibe"):
@@ -131,7 +133,7 @@ class VibeAgent:
         EXPLICACION: [una oración explicando por qué]
         """
         try:
-            response = client.models.generate_content(model="gemini-2.0-flash-lite", contents=prompt)
+            response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
             parsed = self._parsear_respuesta(response.text, "cancion")
             if parsed.get("vibe"):
                 return parsed
@@ -140,21 +142,28 @@ class VibeAgent:
         return self._analizar_localmente(f"{nombre_cancion} {artista}", "cancion")
 
     def detectar_desde_video(self, url_youtube: str) -> dict:
+        # Extraer video ID de la URL
+        video_id = None
+        for patron in [r'v=([a-zA-Z0-9_-]{11})', r'youtu\.be/([a-zA-Z0-9_-]{11})']:
+            m = re.search(patron, url_youtube)
+            if m:
+                video_id = m.group(1)
+                break
+
         if not client:
             return self._analizar_localmente(url_youtube, "video")
-        prompt = f"""
-        Analiza este video de YouTube: {url_youtube}
-        Basándote en el título y contexto de la URL, detecta el vibe emocional
-        para recomendar libros.
-        
-        Responde EXACTAMENTE en este formato:
-        VIBE: [una palabra: melancolico/romantico/misterioso/cozy/aventurero/oscuro/esperanzador]
-        TAGS: [5 palabras separadas por comas]
-        GENEROS: [3 géneros literarios separados por comas]
-        EXPLICACION: [una oración explicando por qué]
-        """
+
+        prompt = f"""Basándote en esta URL de YouTube: {url_youtube}
+{"Video ID: " + video_id if video_id else ""}
+Analiza el contexto probable del video y detecta el vibe emocional para recomendar libros.
+
+Responde EXACTAMENTE en este formato:
+VIBE: [una palabra: melancolico/romantico/misterioso/cozy/aventurero/oscuro/esperanzador]
+TAGS: [5 palabras separadas por comas]
+GENEROS: [3 géneros literarios separados por comas]
+EXPLICACION: [una oración explicando por qué]"""
         try:
-            response = client.models.generate_content(model="gemini-2.0-flash-lite", contents=prompt)
+            response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
             parsed = self._parsear_respuesta(response.text, "video")
             if parsed.get("vibe"):
                 return parsed

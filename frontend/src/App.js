@@ -8,6 +8,20 @@ import Register from './pages/Register';
 import Navbar from './components/Navbar';
 import './index.css';
 
+const Layout = ({ children }) => (
+  <>
+    <Navbar />
+    <div style={{ marginLeft: 0 }} className="main-content">
+      {children}
+    </div>
+    <style>{`
+      @media (min-width: 769px) {
+        .main-content { margin-left: 220px !important; }
+      }
+    `}</style>
+  </>
+);
+
 function App() {
   const token = localStorage.getItem('token');
 
@@ -16,10 +30,10 @@ function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
-        <Route path="/" element={token ? <><Navbar /><Home /></> : <Navigate to="/login" />} />
-        <Route path="/library" element={token ? <><Navbar /><Library /></> : <Navigate to="/login" />} />
-        <Route path="/search" element={token ? <><Navbar /><Search /></> : <Navigate to="/login" />} />
-        <Route path="/profile" element={token ? <><Navbar /><Profile /></> : <Navigate to="/login" />} />
+        <Route path="/" element={token ? <Layout><Home /></Layout> : <Navigate to="/login" />} />
+        <Route path="/library" element={token ? <Layout><Library /></Layout> : <Navigate to="/login" />} />
+        <Route path="/search" element={token ? <Layout><Search /></Layout> : <Navigate to="/login" />} />
+        <Route path="/profile" element={token ? <Layout><Profile /></Layout> : <Navigate to="/login" />} />
       </Routes>
     </BrowserRouter>
   );
